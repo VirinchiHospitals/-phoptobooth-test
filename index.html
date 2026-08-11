@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launch Photo Booth</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: radial-gradient(ellipse at top, #1a1035 0%, #05030d 60%); }
+  .accent-gradient { background: linear-gradient(90deg,#7c3aed,#06b6d4); }
+  .glow { box-shadow: 0 0 40px -10px rgba(124,58,237,0.6); }
+  video, canvas { background:#0a0a12; }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background:#3b2a66; border-radius:4px; }
+</style>
+</head>
+<body class="min-h-screen text-slate-100 font-sans">
+
+<!-- =========================================================
+     CONFIG — edit these values to retarget the campaign
+     ========================================================= -->
+<script>
+  const CONFIG = {
+    templateSrc: "https://placehold.co/1080x1080/0a0a12/7c3aed?text=TEMPLATE+FRAME+%28replace+templateSrc%29&font=roboto",
+    photoBox: { x: 190, y: 260, width: 700, height: 700 }, // where the user photo is drawn, underneath the template
+    canvasSize: { width: 1080, height: 1080 },
+    jpegQuality: 0.92,
+    downloadFilename: "launch-photo-booth.jpg"
+  };
+</script>
+
+<header class="border-b border-violet-900/40 backdrop-blur-sm sticky top-0 z-20 bg-[#05030d]/80">
+  <div class="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg accent-gradient flex items-center justify-center font-bold text-sm">L</div>
+      <div>
+        <p class="text-sm font-semibold tracking-wide">LAUNCH EVENT</p>
+        <p class="text-xs text-slate-400 -mt-0.5">Official Photo Booth</p>
+      </div>
+    </div>
+    <span class="hidden sm:inline-block text-xs px-3 py-1 rounded-full border border-violet-500/40 text-violet-300">Live Now</span>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto px-6 py-10">
+  <section class="text-center mb-10">
+    <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight">
+      Get your <span class="bg-clip-text text-transparent accent-gradient">launch-day</span> photo
+    </h1>
+    <p class="text-slate-400 mt-2 max-w-xl mx-auto">Upload a photo or snap a selfie. We'll frame it for the moment.</p>
+  </section>
+
+  <div class="grid lg:grid-cols-2 gap-8">
+
+    <!-- INPUT PANEL -->
+    <div class="rounded-2xl border border-violet-900/40 bg-white/[0.02] p-6">
+      <h2 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wide">1. Choose your photo</h2>
+
+      <div class="flex gap-2 mb-4">
+        <button id="tabUpload" class="flex-1 py-2 rounded-lg text-sm font-medium bg-violet-600 text-white">Upload</button>
+        <button id="tabWebcam" class="flex-1 py-2 rounded-lg text-sm font-medium bg-white/5 text-slate-300">Webcam</button>
+      </div>
+
+      <div id="panelUpload">
+        <label for="fileInput" class="block cursor-pointer border-2 border-dashed border-violet-800/50 rounded-xl p-8 text-center hover:border-violet-500 transition-colors">
+          <p class="text-sm text-slate-300">Click to browse a file</p>
+          <p class="text-xs text-slate-500 mt-1">JPG or PNG</p>
+        </label>
+        <input id="fileInput" type="file" accept="image/*" class="hidden">
+      </div>
+
+      <div id="panelWebcam" class="hidden">
+        <video id="video" class="w-full rounded-xl border border-violet-900/40 aspect-square object-cover" autoplay muted playsinline></video>
+        <div class="flex gap-2 mt-3">
+          <button id="startWebcam" class="flex-1 py-2 rounded-lg text-sm font-medium bg-white/5 border border-violet-800/50">Start Camera</button>
+          <button id="captureBtn" class="flex-1 py-2 rounded-lg text-sm font-medium accent-gradient text-white disabled:opacity-40" disabled>Capture</button>
+        </div>
+      </div>
+
+      <canvas id="captureCanvas" class="hidden"></canvas>
+      <p id="statusMsg" class="text-xs text-slate-500 mt-4 min-h-[1rem]"></p>
+    </div>
+
+    <!-- PREVIEW PANEL -->
+    <div class="rounded-2xl border border-violet-900/40 bg-white/[0.02] p-6 flex flex-col">
+      <h2 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wide">2. Preview & download</h2>
+      <div class="flex-1 flex items-center justify-center rounded-xl overflow-hidden bg-black/40 border border-violet-900/30">
+        <canvas id="compositeCanvas" class="w-full h-auto glow"></canvas>
+      </div>
+      <button id="downloadBtn" class="mt-5 w-full py-3 rounded-lg font-semibold accent-gradient text-white disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+        Download Image
+      </button>
+    </div>
+
+  </div>
+</main>
+
+<script>
+(function () {
+  const compositeCanvas = document.getElementById('compositeCanvas');
+  const ctx = compositeCanvas.getContext('2d');
+  compositeCanvas.width = CONFIG.canvasSize.width;
+  compositeCanvas.height = CONFIG.canvasSize.height;
+
+  const statusMsg = document.getElementById('statusMsg');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  const templateImg = new Image();
+  let templateReady = false;
+  let userImg = null;
+  let corsRetried = false;
+
+  templateImg.crossOrigin = "anonymous"; // try CORS-safe load first, so export works
+  templateImg.onload = () => { templateReady = true; renderComposite(); };
+  templateImg.onerror = () => {
+    if (!corsRetried) {
+      // host likely doesn't send CORS headers — retry without it so preview still works
+      corsRetried = true;
+      templateImg.removeAttribute('crossorigin');
+      templateImg.src = CONFIG.templateSrc;
+    } else {
+      statusMsg.textContent = "Template image failed to load.";
+    }
+  };
+  templateImg.src = CONFIG.templateSrc;
+
+  function renderComposite() {
+    ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+    ctx.fillStyle = "#0a0a12";
+    ctx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+    if (userImg) {
+      const box = CONFIG.photoBox;
+      // cover-fit the user photo into the defined box
+      const scale = Math.max(box.width / userImg.width, box.height / userImg.height);
+      const sw = box.width / scale;
+      const sh = box.height / scale;
+      const sx = (userImg.width - sw) / 2;
+      const sy = (userImg.height - sh) / 2;
+      ctx.drawImage(userImg, sx, sy, sw, sh, box.x, box.y, box.width, box.height);
+    }
+
+    if (templateReady) {
+      ctx.drawImage(templateImg, 0, 0, compositeCanvas.width, compositeCanvas.height);
+    }
+
+    downloadBtn.disabled = !userImg;
+  }
+
+  function loadUserImage(src) {
+    const img = new Image();
+    img.onload = () => { userImg = img; renderComposite(); statusMsg.textContent = "Photo loaded."; };
+    img.onerror = () => { statusMsg.textContent = "Could not load image."; };
+    img.src = src;
+  }
+
+  // ---- Tabs ----
+  const tabUpload = document.getElementById('tabUpload');
+  const tabWebcam = document.getElementById('tabWebcam');
+  const panelUpload = document.getElementById('panelUpload');
+  const panelWebcam = document.getElementById('panelWebcam');
+
+  function setTab(active) {
+    const uploadActive = active === 'upload';
+    tabUpload.className = "flex-1 py-2 rounded-lg text-sm font-medium " + (uploadActive ? "bg-violet-600 text-white" : "bg-white/5 text-slate-300");
+    tabWebcam.className = "flex-1 py-2 rounded-lg text-sm font-medium " + (!uploadActive ? "bg-violet-600 text-white" : "bg-white/5 text-slate-300");
+    panelUpload.classList.toggle('hidden', !uploadActive);
+    panelWebcam.classList.toggle('hidden', uploadActive);
+    if (uploadActive) stopStream();
+  }
+  tabUpload.addEventListener('click', () => setTab('upload'));
+  tabWebcam.addEventListener('click', () => setTab('webcam'));
+
+  // ---- File upload ----
+  document.getElementById('fileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => loadUserImage(ev.target.result);
+    reader.readAsDataURL(file);
+  });
+
+  // ---- Webcam ----
+  const video = document.getElementById('video');
+  const startWebcam = document.getElementById('startWebcam');
+  const captureBtn = document.getElementById('captureBtn');
+  const captureCanvas = document.getElementById('captureCanvas');
+  let stream = null;
+
+  startWebcam.addEventListener('click', async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+      video.srcObject = stream;
+      captureBtn.disabled = false;
+      statusMsg.textContent = "Camera active.";
+    } catch (err) {
+      statusMsg.textContent = "Camera access denied or unavailable.";
+    }
+  });
+
+  captureBtn.addEventListener('click', () => {
+    captureCanvas.width = video.videoWidth;
+    captureCanvas.height = video.videoHeight;
+    const cctx = captureCanvas.getContext('2d');
+    cctx.translate(captureCanvas.width, 0);
+    cctx.scale(-1, 1); // mirror to match preview
+    cctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+    loadUserImage(captureCanvas.toDataURL('image/png'));
+  });
+
+  function stopStream() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      captureBtn.disabled = true;
+    }
+  }
+
+  // ---- Download ----
+  downloadBtn.addEventListener('click', () => {
+    try {
+      const link = document.createElement('a');
+      link.download = CONFIG.downloadFilename;
+      link.href = compositeCanvas.toDataURL('image/jpeg', CONFIG.jpegQuality);
+      link.click();
+    } catch (err) {
+      statusMsg.textContent = "Download blocked: template image host doesn't allow export (no CORS). Host it on a CORS-enabled server or use a local/same-origin file.";
+    }
+  });
+})();
+</script>
+</body>
+</html>
